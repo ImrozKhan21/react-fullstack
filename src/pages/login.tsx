@@ -3,32 +3,30 @@ import { Form, Formik } from "formik";
 import { FormControl, Box, Button } from "@chakra-ui/react";
 import { Wrapper } from "../components/Wrapper";
 import { InputField } from "../components/InputField";
-import { useMutation } from "urql";
-import { useRegisterMutation } from "../generated/graphql";
+import { useLoginMutation, useRegisterMutation } from "../generated/graphql";
 import { toErrorMap } from "../utils/toErrorMap";
 import { useRouter } from "next/router";
 
 interface registerProps {}
 
 // In NEXT.JS, any page in pages folder is a route automatically
-export const Register: React.FC<registerProps> = ({}) => {
+export const Login: React.FC<registerProps> = ({}) => {
   const router = useRouter(); // Next JS provides it
   //First item in THE BELOW [, regitser] is state in which mutation is like fetching, we don't need it yet
-  const [, register] = useRegisterMutation();
+  const [, login] = useLoginMutation();
   return (
     <Wrapper variant="small">
       <Formik
         initialValues={{ username: "", password: "" }}
         onSubmit={async (values, { setErrors }) => {
-          console.log("VAL", values);
           // Since values matches with GraphQl mutation values like $username and $password,
           // so we don't need too change anything here in register()
-          const response = await register(values);
-          if (response.data?.register.errors) {
+          const response = await login({options: values}); // Since we used $options in Mutation, we pass itlike this here
+          if (response.data?.login.errors) {
             //Our error response we set on server is like
             // [{field: 'username', message: 'something wrong}] so we create a utility toErrorMap
-            setErrors(toErrorMap(response.data.register.errors));
-          } else if (response.data?.register.user) {
+            setErrors(toErrorMap(response.data.login.errors));
+          } else if (response.data?.login.user) {
             router.push("/");
           }
         }}
@@ -57,7 +55,7 @@ export const Register: React.FC<registerProps> = ({}) => {
                 isLoading={isSubmitting}
                 variant="solid"
               >
-                Register
+                Login
               </Button>
             </FormControl>
           </Form>
@@ -67,4 +65,4 @@ export const Register: React.FC<registerProps> = ({}) => {
   );
 };
 
-export default Register;
+export default Login;
