@@ -11,7 +11,7 @@ import {
 } from "type-graphql";
 import { MyContext } from "../types";
 import argon2 from "argon2";
-import session from "express-session";
+import { EntityManager } from "@mikro-orm/postgresql";
 
 @InputType() // For multiple args we can create like this
 class UsernamePasswordInput {
@@ -80,15 +80,25 @@ export class UserResolver {
     }
 
     const hashedPassword = await argon2.hash(options.username);
-    const user = em.create(User, {
-      username: options.username,
-      password: hashedPassword,
-    });
     let isDuplicateErr;
+    let user;
     try {
-      await em.persistAndFlush(user);
+      // We are using Query Builder here
+      const result = await (em as EntityManager)
+        .createQueryBuilder(User)
+        .getKnexQuery()
+        .insert({
+          username: options.username,
+          password: hashedPassword,
+          created_at: new Date(),
+          updated_at: new Date(), // Since Knex is used, key name should be same as database tabel column with 
+        })
+        .returning("*");
+      user = result[0];
+      // We are not using Persist and Flush, it was throwing wierd error in some cases
+      //  await em.persistAndFlush(user);
     } catch (err) {
-      if (err.code === "23505") {
+      if (err.details.includes("already exists")) {
         isDuplicateErr = true;
       }
       if (isDuplicateErr) {
