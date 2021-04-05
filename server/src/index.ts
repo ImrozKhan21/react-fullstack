@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import {MikroORM} from "@mikro-orm/core";
-import {__prod__} from "./constants";
+import {COOKIE_NAME, __prod__} from "./constants";
 import microConfig from "./mikro-orm.config";
 import express from "express";
 import {ApolloServer} from "apollo-server-express";
@@ -9,20 +9,22 @@ import {HelloResolver} from "./resolvers/hello";
 import {PostResolver} from "./resolvers/post";
 import {UserResolver} from "./resolvers/user";
 
-import redis from "redis";
+import Redis from "ioredis";
 import session from "express-session";
 import connectRedis from "connect-redis";
 import cors from "cors";
+import { sendEmail } from "./utils/sendEmail";
+import { User } from "./entities/User";
 
 const main = async () => {
     // Order matters, liked redis session needs to be done before middleware
     const orm = await MikroORM.init(microConfig);
-    await orm.getMigrator().up();
-
+   // TODO, remove string from up
+  // await orm.getMigrator().up();
     const app = express();
 
     const RedisStore = connectRedis(session);
-    const redisClient = redis.createClient();
+    const redis = new Redis();
 
     // For Same origin policy error
     app.use(
@@ -34,9 +36,9 @@ const main = async () => {
     // For Setting of cookie, and using Redix
     app.use(
         session({
-            name: "qid",
+            name: COOKIE_NAME,
             store: new RedisStore({
-                client: redisClient,
+                client: redis,
                 disableTouch: true,
             }),
             cookie: {
@@ -58,7 +60,7 @@ const main = async () => {
             validate: false,
         }),
         context: ({req, res}) =>
-            ({em: orm.em, req, res}), // context is used to share data to all resolvers
+            ({em: orm.em, req, res, redis}), // context is used to share data to all resolvers
     });
 
     apolloServer.applyMiddleware({

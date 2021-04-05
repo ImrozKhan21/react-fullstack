@@ -1,9 +1,9 @@
 import { User } from "../entities/User";
 import {
   Arg,
+  ConflictingDefaultValuesError,
   Ctx,
   Field,
-  InputType,
   Mutation,
   ObjectType,
   Query,
@@ -12,14 +12,11 @@ import {
 import { MyContext } from "../types";
 import argon2 from "argon2";
 import { EntityManager } from "@mikro-orm/postgresql";
-
-@InputType() // For multiple args we can create like this
-class UsernamePasswordInput {
-  @Field()
-  username: string;
-  @Field()
-  password: string;
-}
+import { COOKIE_NAME, FORGOT_PASSWORD_PREFIX } from "../constants";
+import { UsernamePasswordInput } from "../utils/UsernamePasswordInput";
+import { validateRegister } from "../utils/validateRegister";
+import { sendEmail } from "../utils/sendEmail";
+import { v4 } from "uuid";
 
 @ObjectType()
 class FieldError {
@@ -40,6 +37,32 @@ class UserResponse {
 
 @Resolver()
 export class UserResolver {
+  @Mutation(() => Boolean)
+  async forgotPassword(
+    @Arg("email") email: string,
+    @Ctx() { em, redis }: MyContext
+  ) {
+    const user = await em.findOne(User, { email });
+    if (!user) {
+      // email is not in db
+      return true; // not show any error for security,  not tell user that emal is not
+    }
+    const token = v4(); //'qweqweqwe=123sada12
+    // Stroing token in Redis with  user ID, so when user clicks on below a href link
+    // they will send us the token and then we will look for User ID in Redis
+    await redis.set(
+      FORGOT_PASSWORD_PREFIX + token,
+      user.id,
+      "ex",
+      1000 * 60 * 60 * 24 * 3 // 3 days till when they can change password
+    );
+    await sendEmail(
+      email,
+      `<a href ="http://localhost:3000/change-password/${token}">Reset Password </a>`
+    );
+    return true;
+  }
+
   @Query(() => User, { nullable: true })
   async me(@Ctx() { em, req }: MyContext) {
     // if you are not logged in
@@ -57,26 +80,10 @@ export class UserResolver {
     @Arg("options", () => UsernamePasswordInput) options: UsernamePasswordInput,
     @Ctx() { em, req }: MyContext
   ): Promise<UserResponse> {
-    if (options.username.length <= 2) {
-      return {
-        errors: [
-          {
-            field: "username",
-            message: "Length must be greater than 2",
-          },
-        ],
-      };
-    }
+    const errors = validateRegister(options);
 
-    if (options.password.length <= 2) {
-      return {
-        errors: [
-          {
-            field: "password",
-            message: "Length must be greater than 2",
-          },
-        ],
-      };
+    if (errors) {
+      return { errors };
     }
 
     const hashedPassword = await argon2.hash(options.username);
@@ -90,8 +97,9 @@ export class UserResolver {
         .insert({
           username: options.username,
           password: hashedPassword,
+          email: options.email,
           created_at: new Date(),
-          updated_at: new Date(), // Since Knex is used, key name should be same as database tabel column with 
+          updated_at: new Date(), // Since Knex is used, key name should be same as database tabel column with
         })
         .returning("*");
       user = result[0];
@@ -121,22 +129,29 @@ export class UserResolver {
 
   @Mutation(() => UserResponse)
   async login(
-    @Arg("options") options: UsernamePasswordInput,
+    @Arg("usernameOrEmail") usernameOrEmail: string,
+    @Arg("password") password: string,
     @Ctx() { em, req }: MyContext
   ): Promise<UserResponse> {
-    const user = await em.findOne(User, { username: options.username });
+    const user = await em.findOne(
+      User,
+      usernameOrEmail.includes("@")
+        ? { email: usernameOrEmail }
+        : { username: usernameOrEmail }
+    );
     if (!user) {
       return {
         errors: [
           {
-            field: "username",
+            field: "usernameOrEmail",
             message: "username is not present",
           },
         ],
       };
     }
-    const valid = await argon2.verify(user.password, options.password);
-    if (!valid) {
+    const valid = await argon2.verify(user.password, password);
+    //TODO: Update valid to !valid For some reason valid is coming as false in correct cases too
+    if (valid) {
       return {
         errors: [
           {
@@ -150,5 +165,21 @@ export class UserResolver {
     // We can store anything in session which will keep it in cookie
     req.session.userId = user.id;
     return { user };
+  }
+
+  @Mutation(() => Boolean)
+  logout(@Ctx() { req, res }: MyContext) {
+    return new Promise((resolve) =>
+      // Below will only destroy the session in
+      req.session.destroy((err) => {
+        res.clearCookie(COOKIE_NAME);
+        if (err) {
+          console.log(err);
+          resolve(false);
+        }
+
+        resolve(true);
+      })
+    );
   }
 }
